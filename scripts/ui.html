@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Keepalive SIAA</title>
+  <style>
+    :root { color-scheme: light; font-family: sans-serif; }
+    body { margin: 0; background: #f4f1ea; color: #1c1915; }
+    main { max-width: 40rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+    p { margin: 0.25rem 0 0; }
+    section { background: #fff; border: 1px solid #e4ddd0; border-radius: 12px; padding: 1rem; margin-top: 1rem; }
+    label { display: block; font-size: 0.85rem; margin: 0.75rem 0 0.3rem; }
+    input, textarea, button { font: inherit; }
+    input, textarea { width: 100%; box-sizing: border-box; border: 1px solid #d5cdbf; border-radius: 8px; padding: 0.55rem 0.7rem; }
+    textarea { min-height: 8rem; }
+    .row { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+    .row > div { flex: 1; min-width: 7rem; }
+    .days { display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; margin-top: 0.35rem; }
+    .days label { display: flex; align-items: center; gap: 0.3rem; margin: 0; }
+    .days input { width: auto; }
+    button { margin-top: 0.75rem; border: 0; border-radius: 8px; background: #1f4d3a; color: #fff; padding: 0.55rem 0.9rem; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .muted { color: #655e54; font-size: 0.9rem; }
+    .ok { color: #1f4d3a; font-weight: 700; }
+    .bad { color: #8d2a2a; font-weight: 700; }
+    .fila { max-height: 16rem; overflow: auto; margin-top: 0.5rem; }
+    .fila div { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.3rem 0; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+    .ok-photo { display: none; width: 100%; max-width: 16rem; margin-top: 0.75rem; border-radius: 12px; }
+    .ok-photo.show { display: block; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Keepalive SIAA</h1>
+    <p class="muted">O teste devolve o nome do candidato encontrado na grade.</p>
+
+    <section>
+      <label for="token">Token</label>
+      <input id="token" type="password" autocomplete="current-password">
+      <button id="enter" type="button">Entrar</button>
+      <p id="state" class="muted">Informe o token.</p>
+      <p id="last" class="muted"></p>
+      <p id="next" class="muted"></p>
+    </section>
+
+    <section>
+      <h2>Reviver sessão</h2>
+      <label for="curl">cURL em bash</label>
+      <textarea id="curl" spellcheck="false" placeholder="curl https://siaa.cruzeirodosul.edu.br/..."></textarea>
+      <button id="extract" type="button">Extrair token</button>
+      <label for="sessionToken">JSESSIONID</label>
+      <input id="sessionToken" readonly>
+      <p id="extractResult" class="muted"></p>
+      <button id="revive" type="button">Reviver agora</button>
+      <p id="reviveResult" class="muted"></p>
+    </section>
+
+    <section>
+      <h2>Agenda</h2>
+      <div class="days" id="days">
+        <label><input type="checkbox" value="1" checked> Seg</label>
+        <label><input type="checkbox" value="2" checked> Ter</label>
+        <label><input type="checkbox" value="3" checked> Qua</label>
+        <label><input type="checkbox" value="4" checked> Qui</label>
+        <label><input type="checkbox" value="5" checked> Sex</label>
+        <label><input type="checkbox" value="6" checked> Sáb</label>
+        <label><input type="checkbox" value="7" checked> Dom</label>
+      </div>
+      <div class="row">
+        <div>
+          <label for="start">Início</label>
+          <input id="start" type="time" value="07:00">
+        </div>
+        <div>
+          <label for="end">Fim</label>
+          <input id="end" type="time" value="22:00">
+        </div>
+        <div>
+          <label for="interval">Intervalo (min)</label>
+          <input id="interval" type="number" min="1" max="1440" value="10">
+        </div>
+      </div>
+      <button id="saveSchedule" type="button">Salvar agenda</button>
+    </section>
+
+    <section>
+      <h2>Teste de RGM</h2>
+      <label for="rgm">RGM</label>
+      <input id="rgm" inputmode="numeric" autocomplete="off">
+      <button id="test" type="button">Testar</button>
+      <p id="testResult" class="muted"></p>
+      <img id="testPhoto" class="ok-photo" alt="Deu certo" src="/ok.jpg">
+    </section>
+
+    <section>
+      <h2>Nomes</h2>
+      <p id="filaResumo" class="muted">Um RGM por hora, dentro da agenda.</p>
+      <img id="filaPhoto" class="ok-photo" alt="Deu certo" src="/ok.jpg">
+      <div id="fila" class="fila"></div>
+    </section>
+  </main>
+  <script>
+
+    const tokenInput = document.querySelector("#token");
+    const stateEl = document.querySelector("#state");
+    const lastEl = document.querySelector("#last");
+    const nextEl = document.querySelector("#next");
+    tokenInput.value = sessionStorage.getItem("keepalive-token") || "";
+
+    function token() {
+      return tokenInput.value.trim();
+    }
+
+    function mark(el, ok, text) {
+      el.className = ok ? "ok" : "bad";
+      el.textContent = text;
+    }
+
+    async function api(path, options = {}) {
+      const headers = { Authorization: "Bearer " + token() };
+      if (options.json) headers["Content-Type"] = "application/json";
+      const response = await fetch(path, {
+        method: options.method || "GET",
+        headers,
+        body: options.json ? JSON.stringify(options.json) : options.body,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) throw new Error("Token recusado.");
+      return { response, payload };
+    }
+
+    function paint(status) {
+      stateEl.className = status.session ? "ok" : "bad";
+      stateEl.textContent = status.session ? "Sessão gravada." : "Sem sessão.";
+      const last = status.last || {};
+      lastEl.className = "muted";
+      lastEl.textContent = last.at
+        ? "Último ping: " + (last.ok ? "OK" : "falha") + (last.message ? " — " + last.message : "")
+        : "Ainda não houve ping nesta agenda.";
+      nextEl.className = "muted";
+      const dayNames = ["", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+      const days = status.schedule.days || [];
+      nextEl.textContent = "Próximo ping: " + status.schedule.nextRunLabel
+        + " · " + days.map((day) => dayNames[day]).join(", ")
+        + " · " + status.schedule.startTime + "–" + status.schedule.endTime
+        + " · ping aleatório";
+      document.querySelectorAll("#days input").forEach((input) => {
+        input.checked = days.includes(Number(input.value));
+      });
+      document.querySelector("#start").value = status.schedule.startTime;
+      document.querySelector("#end").value = status.schedule.endTime;
+      document.querySelector("#interval").value = status.schedule.intervalMin;
+      const resumo = document.querySelector("#filaResumo");
+      if (resumo && status.schedule.nextAlunoLabel) {
+        resumo.textContent = "Próximo nome: " + status.schedule.nextAlunoLabel + ". Um RGM por hora, dentro da agenda.";
+      }
+    }
+
+    function paintFila(rows) {
+      const box = document.querySelector("#fila");
+      box.replaceChildren(...rows.map((row) => {
+        const line = document.createElement("div");
+        const rgm = document.createElement("span");
+        const nome = document.createElement("span");
+        rgm.textContent = row.rgm;
+        nome.textContent = row.nome || (row.ok ? "" : "pendente");
+        line.append(rgm, nome);
+        return line;
+      }));
+      document.querySelector("#filaPhoto").classList.toggle("show", rows.some((row) => row.nome));
+    }
+
+    async function refresh() {
+      const { payload } = await api("/status");
+      paint(payload);
+      const fila = await api("/alunos");
+      paintFila(fila.payload);
+    }
+
+    setInterval(() => { if (token()) refresh().catch(() => {}); }, 60000);
+
+    document.querySelector("#enter").onclick = async () => {
+      sessionStorage.setItem("keepalive-token", token());
+      try { await refresh(); } catch (error) { mark(stateEl, false, error.message); }
+    };
+
+    function extractJsession(raw) {
+      const text = raw.replace(/\\\s*\r?\n/g, " ").replace(/^﻿/, "").trim();
+      if (!/^curl(\.exe)?\b/i.test(text)) throw new Error("O texto não começa com curl.");
+      const match = text.match(/(?:-b|--cookie)\s+(?:'([^']*)'|"([^"]*)"|(\S+))/i);
+      const jar = (match && (match[1] || match[2] || match[3])) || "";
+      const part = jar.split(";").map((item) => item.trim()).find((item) => item.toLowerCase().startsWith("jsessionid="));
+      if (!part) throw new Error("A curl não tem JSESSIONID.");
+      return part.slice(part.indexOf("=") + 1);
+    }
+
+    function extractToken() {
+      const result = document.querySelector("#extractResult");
+      try {
+        document.querySelector("#sessionToken").value = extractJsession(document.querySelector("#curl").value);
+        mark(result, true, "Token extraído.");
+      } catch (error) {
+        document.querySelector("#sessionToken").value = "";
+        mark(result, false, error.message);
+      }
+    }
+
+    document.querySelector("#extract").onclick = extractToken;
+    document.querySelector("#curl").addEventListener("paste", () => setTimeout(extractToken, 0));
+
+    document.querySelector("#revive").onclick = async (event) => {
+      event.target.disabled = true;
+      try {
+        const { response, payload } = await api("/session", { method: "POST", body: document.querySelector("#curl").value });
+        mark(document.querySelector("#reviveResult"), response.ok, response.ok ? "OK. Sessão revivida." : "Falha. " + (payload.message || payload.error || "sessão recusada"));
+        if (response.ok) document.querySelector("#curl").value = "";
+        await refresh();
+      } catch (error) {
+        mark(document.querySelector("#reviveResult"), false, error.message);
+      } finally {
+        event.target.disabled = false;
+      }
+    };
+
+    document.querySelector("#saveSchedule").onclick = async (event) => {
+      event.target.disabled = true;
+      try {
+        const { payload } = await api("/schedule", {
+          method: "POST",
+          json: {
+            startTime: document.querySelector("#start").value,
+            endTime: document.querySelector("#end").value,
+            intervalMin: Number(document.querySelector("#interval").value),
+            days: [...document.querySelectorAll("#days input:checked")].map((input) => Number(input.value)),
+          },
+        });
+        paint(payload);
+      } catch (error) {
+        mark(nextEl, false, error.message);
+      } finally {
+        event.target.disabled = false;
+      }
+    };
+
+    document.querySelector("#test").onclick = async (event) => {
+      event.target.disabled = true;
+      const result = document.querySelector("#testResult");
+      try {
+        const { response, payload } = await api("/alunos", {
+          method: "POST",
+          json: { aluno: document.querySelector("#rgm").value.trim() },
+        });
+        mark(result, response.ok, response.ok ? (payload.nome || "OK (sem nome na grade)") : "Falha");
+        document.querySelector("#testPhoto").classList.toggle("show", response.ok);
+      } catch {
+        mark(result, false, "Falha");
+        document.querySelector("#testPhoto").classList.remove("show");
+      } finally {
+        event.target.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>

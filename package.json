@@ -1,0 +1,11 @@
+{
+  "name": "keepalive",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/keepalive.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}
